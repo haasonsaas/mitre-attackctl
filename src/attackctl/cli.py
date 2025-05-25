@@ -136,10 +136,50 @@ def map(
     technique_id: str = typer.Argument(..., help="Technique ID to map"),
     to: str = typer.Option("sigma", "--to", help="Target format (sigma, splunk, sentinel)"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path"),
+    update: bool = typer.Option(False, "--update", help="Update cache before mapping"),
 ) -> None:
-    """Map technique to detection rules."""
-    console.print(f"🗺️  Mapping [cyan]{technique_id}[/cyan] to [cyan]{to}[/cyan] rules")
-    console.print("[yellow]Note: Mapping functionality coming soon![/yellow]")
+    """Generate detection rules for a specific technique."""
+    from attackctl.data import AttackDataManager
+    from attackctl.rules import SigmaRuleGenerator
+    
+    data_manager = AttackDataManager()
+    
+    try:
+        bundle = data_manager.get_data(force_update=update)
+        technique = bundle.get_technique_by_id(technique_id.upper())
+        
+        if not technique:
+            console.print(f"[red]Technique {technique_id} not found[/red]")
+            console.print("[dim]Try using 'attackctl search' to find the correct ID[/dim]")
+            raise typer.Exit(1)
+        
+        if to.lower() == "sigma":
+            generator = SigmaRuleGenerator()
+            rule = generator.generate_sigma_rule(technique)
+            
+            if rule:
+                rule_yaml = generator.export_rule_yaml(rule)
+                
+                if output:
+                    # Write to file
+                    output.write_text(rule_yaml, encoding='utf-8')
+                    console.print(f"✅ Sigma rule saved to: [cyan]{output}[/cyan]")
+                else:
+                    # Print to console
+                    console.print(f"🗺️  Generated Sigma rule for [cyan]{technique_id}[/cyan]:")
+                    console.print()
+                    console.print(rule_yaml)
+            else:
+                console.print(f"[yellow]No rule template available for technique {technique_id}[/yellow]")
+                console.print("[dim]Rule generation supports: T1003, T1003.001, T1059, T1059.003, T1055, T1053[/dim]")
+        else:
+            console.print(f"[red]Unsupported format: {to}[/red]")
+            console.print("[dim]Currently supported: sigma[/dim]")
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        console.print(f"[red]Error generating detection rule: {e}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -147,10 +187,58 @@ def coverage(
     rules_path: Path = typer.Argument(..., help="Path to rules directory"),
     format: str = typer.Option("table", "--format", "-f", help="Output format (table, markdown, json)"),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file path"),
+    update: bool = typer.Option(False, "--update", help="Update cache before analysis"),
+    show_covered: bool = typer.Option(False, "--show-covered", help="Show techniques with detection coverage"),
+    show_gaps: bool = typer.Option(True, "--show-gaps/--hide-gaps", help="Show techniques without coverage"),
 ) -> None:
     """Analyze detection coverage across ATT&CK techniques."""
-    console.print(f"📈 Analyzing coverage for rules in: [cyan]{rules_path}[/cyan]")
-    console.print("[yellow]Note: Coverage functionality coming soon![/yellow]")
+    from attackctl.data import AttackDataManager
+    from attackctl.rules import CoverageAnalyzer
+    import json
+    
+    data_manager = AttackDataManager()
+    
+    try:
+        if not rules_path.exists():
+            console.print(f"[red]Rules directory does not exist: {rules_path}[/red]")
+            raise typer.Exit(1)
+        
+        console.print(f"📈 Analyzing coverage for rules in: [cyan]{rules_path}[/cyan]")
+        
+        bundle = data_manager.get_data(force_update=update)
+        analyzer = CoverageAnalyzer(bundle)
+        
+        # Perform coverage analysis
+        with console.status("Analyzing detection coverage..."):
+            coverage_results = analyzer.analyze_directory(rules_path)
+            report = analyzer.generate_coverage_report(coverage_results)
+        
+        if format == "json":
+            report_json = json.dumps(report, indent=2)
+            if output:
+                output.write_text(report_json, encoding='utf-8')
+                console.print(f"✅ Coverage report saved to: [cyan]{output}[/cyan]")
+            else:
+                console.print(report_json)
+        
+        elif format == "table":
+            _render_coverage_table(report, show_covered, show_gaps)
+            
+        elif format == "markdown":
+            markdown_report = _generate_coverage_markdown(report, show_covered, show_gaps)
+            if output:
+                output.write_text(markdown_report, encoding='utf-8')
+                console.print(f"✅ Coverage report saved to: [cyan]{output}[/cyan]")
+            else:
+                console.print(markdown_report)
+        
+        else:
+            console.print(f"[red]Unknown format: {format}[/red]")
+            raise typer.Exit(1)
+            
+    except Exception as e:
+        console.print(f"[red]Error analyzing coverage: {e}[/red]")
+        raise typer.Exit(1)
 
 
 @app.command()
@@ -175,6 +263,123 @@ def export(
     if filter:
         console.print(f"🔍 Using filter: [cyan]{filter}[/cyan]")
     console.print("[yellow]Note: Export functionality coming soon![/yellow]")
+
+
+def _render_coverage_table(report: dict, show_covered: bool, show_gaps: bool) -> None:
+    """Render coverage analysis as a Rich table."""
+    from rich.table import Table
+    
+    # Summary
+    summary = report["summary"]
+    console.print()
+    console.print(f"📊 [bold]Coverage Summary[/bold]")
+    console.print(f"   Total Techniques: {summary['total_techniques']}")
+    console.print(f"   Covered: [green]{summary['covered_techniques']}[/green] ({summary['coverage_percentage']:.1f}%)")
+    console.print(f"   Gaps: [red]{summary['uncovered_techniques']}[/red]")
+    console.print()
+    
+    # Tactic breakdown
+    tactic_table = Table(title="Coverage by Tactic")
+    tactic_table.add_column("Tactic", style="cyan")
+    tactic_table.add_column("Covered", style="green", justify="right")
+    tactic_table.add_column("Total", style="blue", justify="right")
+    tactic_table.add_column("Percentage", style="magenta", justify="right")
+    
+    for tactic, data in report["tactic_breakdown"].items():
+        percentage = data["percentage"]
+        color = "green" if percentage >= 70 else "yellow" if percentage >= 40 else "red"
+        tactic_table.add_row(
+            tactic.replace("-", " ").title(),
+            str(data["covered"]),
+            str(data["total"]),
+            f"[{color}]{percentage:.1f}%[/{color}]"
+        )
+    
+    console.print(tactic_table)
+    
+    # Technique details
+    if show_gaps or show_covered:
+        console.print()
+        techniques = report["technique_details"]
+        
+        if show_gaps:
+            gaps = [t for t in techniques if not t["has_detection"]]
+            if gaps:
+                gap_table = Table(title=f"Techniques Without Detection ({len(gaps)})")
+                gap_table.add_column("ID", style="cyan", no_wrap=True)
+                gap_table.add_column("Name", style="red")
+                
+                for technique in gaps[:20]:  # Show first 20
+                    gap_table.add_row(technique["technique_id"], technique["technique_name"])
+                
+                if len(gaps) > 20:
+                    gap_table.add_row("...", f"and {len(gaps) - 20} more")
+                
+                console.print(gap_table)
+        
+        if show_covered:
+            covered = [t for t in techniques if t["has_detection"]]
+            if covered:
+                covered_table = Table(title=f"Techniques With Detection ({len(covered)})")
+                covered_table.add_column("ID", style="cyan", no_wrap=True)
+                covered_table.add_column("Name", style="green")
+                covered_table.add_column("Rules", style="blue", justify="right")
+                
+                for technique in covered[:20]:  # Show first 20
+                    covered_table.add_row(
+                        technique["technique_id"], 
+                        technique["technique_name"],
+                        str(technique["rule_count"])
+                    )
+                
+                if len(covered) > 20:
+                    covered_table.add_row("...", f"and {len(covered) - 20} more", "")
+                
+                console.print(covered_table)
+
+
+def _generate_coverage_markdown(report: dict, show_covered: bool, show_gaps: bool) -> str:
+    """Generate coverage report as Markdown."""
+    summary = report["summary"]
+    
+    md = f"""# ATT&CK Detection Coverage Report
+
+## Summary
+
+- **Total Techniques**: {summary['total_techniques']}
+- **Covered**: {summary['covered_techniques']} ({summary['coverage_percentage']:.1f}%)
+- **Gaps**: {summary['uncovered_techniques']}
+
+## Coverage by Tactic
+
+| Tactic | Covered | Total | Percentage |
+|--------|---------|-------|------------|
+"""
+    
+    for tactic, data in report["tactic_breakdown"].items():
+        md += f"| {tactic.replace('-', ' ').title()} | {data['covered']} | {data['total']} | {data['percentage']:.1f}% |\n"
+    
+    if show_gaps:
+        techniques = report["technique_details"]
+        gaps = [t for t in techniques if not t["has_detection"]]
+        
+        if gaps:
+            md += f"\n## Techniques Without Detection ({len(gaps)})\n\n"
+            md += "| ID | Name |\n|----|----- |\n"
+            for technique in gaps:
+                md += f"| {technique['technique_id']} | {technique['technique_name']} |\n"
+    
+    if show_covered:
+        techniques = report["technique_details"]
+        covered = [t for t in techniques if t["has_detection"]]
+        
+        if covered:
+            md += f"\n## Techniques With Detection ({len(covered)})\n\n"
+            md += "| ID | Name | Rules |\n|----|------|-------|\n"
+            for technique in covered:
+                md += f"| {technique['technique_id']} | {technique['technique_name']} | {technique['rule_count']} |\n"
+    
+    return md
 
 
 if __name__ == "__main__":

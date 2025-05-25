@@ -1,8 +1,9 @@
-"""Data models for ATT&CK framework objects."""
+"""Data models for ATT&CK framework objects and detection rules."""
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel, Field
 from datetime import datetime
+from enum import Enum
 
 
 class ExternalReference(BaseModel):
@@ -127,3 +128,119 @@ class AttackBundle(BaseModel):
                 results.append(technique)
         
         return results
+
+
+# Detection Rule Models
+
+class RuleStatus(str, Enum):
+    """Sigma rule status levels."""
+    STABLE = "stable"
+    TEST = "test"
+    EXPERIMENTAL = "experimental"
+    DEPRECATED = "deprecated"
+    UNSUPPORTED = "unsupported"
+
+
+class RuleLevel(str, Enum):
+    """Sigma rule severity levels."""
+    INFORMATIONAL = "informational"
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
+class LogSource(BaseModel):
+    """Sigma rule log source definition."""
+    product: Optional[str] = None
+    service: Optional[str] = None
+    category: Optional[str] = None
+    definition: Optional[str] = None
+
+
+class DetectionItem(BaseModel):
+    """Detection logic item (selection, keyword, etc.)."""
+    name: str
+    conditions: Dict[str, Any]
+
+
+class SigmaRule(BaseModel):
+    """Sigma detection rule model."""
+    title: str
+    id: Optional[str] = None
+    status: RuleStatus = RuleStatus.EXPERIMENTAL
+    description: str
+    author: Optional[str] = None
+    date: Optional[str] = None
+    references: List[str] = Field(default_factory=list)
+    tags: List[str] = Field(default_factory=list)
+    logsource: LogSource
+    detection: Dict[str, Any] = Field(default_factory=dict)
+    condition: str = ""
+    falsepositives: List[str] = Field(default_factory=list)
+    level: RuleLevel = RuleLevel.MEDIUM
+    
+    @property
+    def attack_techniques(self) -> List[str]:
+        """Extract ATT&CK technique IDs from tags."""
+        techniques = []
+        for tag in self.tags:
+            if tag.startswith("attack.t") and not tag.startswith("attack.ta"):
+                # Extract technique ID (e.g., "attack.t1059.003" -> "T1059.003")
+                technique_id = tag.replace("attack.t", "T").upper()
+                techniques.append(technique_id)
+        return techniques
+    
+    @property
+    def attack_tactics(self) -> List[str]:
+        """Extract ATT&CK tactic names from tags."""
+        tactics = []
+        for tag in self.tags:
+            if tag.startswith("attack.") and not tag.startswith("attack.t"):
+                # Extract tactic name (e.g., "attack.credential_access" -> "credential-access")
+                tactic = tag.replace("attack.", "").replace("_", "-")
+                tactics.append(tactic)
+        return tactics
+
+
+class RuleTemplate(BaseModel):
+    """Template for generating detection rules."""
+    technique_id: str
+    name: str
+    description: str
+    platforms: List[str] = Field(default_factory=list)
+    data_sources: List[str] = Field(default_factory=list)
+    tactics: List[str] = Field(default_factory=list)
+    template_type: str = "sigma"  # sigma, splunk, elastic, etc.
+    base_template: str = ""  # Template content with placeholders
+
+
+class DetectionCoverage(BaseModel):
+    """Detection coverage analysis model."""
+    technique_id: str
+    technique_name: str
+    has_detection: bool = False
+    rule_count: int = 0
+    rule_files: List[str] = Field(default_factory=list)
+    platforms_covered: List[str] = Field(default_factory=list)
+    data_sources_covered: List[str] = Field(default_factory=list)
+    coverage_score: float = 0.0  # 0-1 score based on completeness
+    
+    def calculate_coverage_score(self, technique: 'Technique') -> float:
+        """Calculate coverage score based on platforms and data sources."""
+        if not self.has_detection:
+            return 0.0
+        
+        platform_coverage = 0.0
+        if technique.platforms:
+            covered_platforms = len(set(self.platforms_covered) & set(technique.platforms))
+            platform_coverage = covered_platforms / len(technique.platforms)
+        
+        data_source_coverage = 0.0
+        if technique.data_sources:
+            covered_sources = len(set(self.data_sources_covered) & set(technique.data_sources))
+            data_source_coverage = covered_sources / len(technique.data_sources)
+        
+        # Weighted average: 60% platform coverage, 40% data source coverage
+        self.coverage_score = (platform_coverage * 0.6) + (data_source_coverage * 0.4)
+        return self.coverage_score
