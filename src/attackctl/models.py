@@ -131,9 +131,18 @@ class AttackBundle(BaseModel):
 
 
 # Detection Rule Models
+# These models support Sigma rule generation and coverage analysis functionality
 
 class RuleStatus(str, Enum):
-    """Sigma rule status levels."""
+    """
+    Sigma rule status levels indicating operational readiness.
+    
+    - STABLE: Production-ready rules with low false positive rates
+    - TEST: Rules being validated, may have higher false positives  
+    - EXPERIMENTAL: New rules requiring validation and tuning
+    - DEPRECATED: Outdated rules that should be removed
+    - UNSUPPORTED: Rules that may not work with current systems
+    """
     STABLE = "stable"
     TEST = "test"
     EXPERIMENTAL = "experimental"
@@ -142,7 +151,16 @@ class RuleStatus(str, Enum):
 
 
 class RuleLevel(str, Enum):
-    """Sigma rule severity levels."""
+    """
+    Sigma rule severity levels for alert prioritization.
+    
+    Follows standard security severity classification:
+    - CRITICAL: Immediate response required (active compromise)
+    - HIGH: Urgent investigation (likely malicious activity)
+    - MEDIUM: Standard investigation (suspicious activity)
+    - LOW: Informational (potential reconnaissance)
+    - INFORMATIONAL: Logging only (baseline activity)
+    """
     INFORMATIONAL = "informational"
     LOW = "low"
     MEDIUM = "medium"
@@ -151,7 +169,15 @@ class RuleLevel(str, Enum):
 
 
 class LogSource(BaseModel):
-    """Sigma rule log source definition."""
+    """
+    Sigma rule log source definition specifying which logs to analyze.
+    
+    Attributes:
+        product: Log source product (e.g., "windows", "linux", "aws")
+        service: Specific service within product (e.g., "security", "system")
+        category: Event category (e.g., "process_creation", "file_event")
+        definition: Additional requirements for log source configuration
+    """
     product: Optional[str] = None
     service: Optional[str] = None
     category: Optional[str] = None
@@ -159,13 +185,39 @@ class LogSource(BaseModel):
 
 
 class DetectionItem(BaseModel):
-    """Detection logic item (selection, keyword, etc.)."""
+    """
+    Detection logic item representing a selection or condition block.
+    
+    Used internally for building complex detection logic with multiple
+    selection criteria, keywords, filters, and conditions.
+    """
     name: str
     conditions: Dict[str, Any]
 
 
 class SigmaRule(BaseModel):
-    """Sigma detection rule model."""
+    """
+    Complete Sigma detection rule model following official Sigma specification.
+    
+    Represents a structured detection rule that can be converted to various
+    SIEM formats. Includes all standard Sigma fields plus helper methods
+    for extracting ATT&CK framework mappings.
+    
+    Attributes:
+        title: Short, descriptive rule name (< 50 chars recommended)
+        id: Unique identifier (UUID) for rule management and relationships
+        status: Operational status indicating rule maturity level
+        description: Detailed explanation of what the rule detects
+        author: Rule creator(s) for attribution and contact
+        date: Creation date in YYYY/MM/DD format
+        references: External URLs providing context or documentation
+        tags: Framework mappings (ATT&CK, CAR, etc.) and categorization
+        logsource: Specification of which logs to analyze
+        detection: Core detection logic with selections and conditions
+        condition: Boolean logic combining detection selections
+        falsepositives: Known scenarios that may trigger false alerts
+        level: Severity classification for alert prioritization
+    """
     title: str
     id: Optional[str] = None
     status: RuleStatus = RuleStatus.EXPERIMENTAL
@@ -182,7 +234,19 @@ class SigmaRule(BaseModel):
     
     @property
     def attack_techniques(self) -> List[str]:
-        """Extract ATT&CK technique IDs from tags."""
+        """
+        Extract ATT&CK technique IDs from tags.
+        
+        Parses tags following the format "attack.t####.###" and converts
+        them to standard MITRE technique format "T####.###".
+        
+        Returns:
+            List of technique IDs (e.g., ["T1059.003", "T1003.001"])
+        
+        Example:
+            tags = ["attack.t1059.003", "attack.credential_access"]
+            rule.attack_techniques -> ["T1059.003"]
+        """
         techniques = []
         for tag in self.tags:
             if tag.startswith("attack.t") and not tag.startswith("attack.ta"):
@@ -193,7 +257,19 @@ class SigmaRule(BaseModel):
     
     @property
     def attack_tactics(self) -> List[str]:
-        """Extract ATT&CK tactic names from tags."""
+        """
+        Extract ATT&CK tactic names from tags.
+        
+        Parses tactic tags and normalizes them to ATT&CK tactic naming
+        convention (lowercase with hyphens).
+        
+        Returns:
+            List of tactic names (e.g., ["credential-access", "execution"])
+            
+        Example:
+            tags = ["attack.credential_access", "attack.t1059.003"]
+            rule.attack_tactics -> ["credential-access"]
+        """
         tactics = []
         for tag in self.tags:
             if tag.startswith("attack.") and not tag.startswith("attack.t"):
@@ -204,7 +280,23 @@ class SigmaRule(BaseModel):
 
 
 class RuleTemplate(BaseModel):
-    """Template for generating detection rules."""
+    """
+    Template definition for generating detection rules from ATT&CK techniques.
+    
+    Stores metadata and template content for generating platform-specific
+    detection rules. Templates use placeholder substitution to customize
+    rules based on technique characteristics.
+    
+    Attributes:
+        technique_id: ATT&CK technique ID this template applies to
+        name: Human-readable template name
+        description: Template purpose and usage notes
+        platforms: Supported platforms (windows, linux, macos, etc.)
+        data_sources: Required data sources for effective detection
+        tactics: ATT&CK tactics this template addresses
+        template_type: Target format (sigma, splunk, elastic, etc.)
+        base_template: Template content with {placeholder} variables
+    """
     technique_id: str
     name: str
     description: str
@@ -216,7 +308,23 @@ class RuleTemplate(BaseModel):
 
 
 class DetectionCoverage(BaseModel):
-    """Detection coverage analysis model."""
+    """
+    Analysis model for ATT&CK technique detection coverage assessment.
+    
+    Tracks detection capability for individual techniques across rule
+    repositories, calculating coverage scores based on platform and
+    data source completeness.
+    
+    Attributes:
+        technique_id: ATT&CK technique identifier (e.g., "T1003.001")
+        technique_name: Human-readable technique name
+        has_detection: Whether any detection rules exist for this technique
+        rule_count: Number of rules that detect this technique
+        rule_files: File paths containing detection rules
+        platforms_covered: Platforms with detection coverage
+        data_sources_covered: Data sources with detection coverage  
+        coverage_score: Calculated completeness score (0.0-1.0)
+    """
     technique_id: str
     technique_name: str
     has_detection: bool = False
@@ -227,20 +335,44 @@ class DetectionCoverage(BaseModel):
     coverage_score: float = 0.0  # 0-1 score based on completeness
     
     def calculate_coverage_score(self, technique: 'Technique') -> float:
-        """Calculate coverage score based on platforms and data sources."""
+        """
+        Calculate detection coverage score based on platform and data source coverage.
+        
+        Uses weighted scoring to assess how comprehensively a technique is detected
+        across its applicable platforms and required data sources.
+        
+        Args:
+            technique: ATT&CK technique object with platform and data source info
+            
+        Returns:
+            Coverage score from 0.0 (no coverage) to 1.0 (complete coverage)
+            
+        Scoring Algorithm:
+            - Platform coverage: (covered platforms / total platforms) * 0.6
+            - Data source coverage: (covered sources / total sources) * 0.4
+            - Final score: weighted average of platform and data source coverage
+            
+        Example:
+            Technique supports 3 platforms, 2 data sources
+            Rules cover 2 platforms, 1 data source
+            Score = (2/3 * 0.6) + (1/2 * 0.4) = 0.4 + 0.2 = 0.6
+        """
         if not self.has_detection:
             return 0.0
         
+        # Calculate platform coverage percentage
         platform_coverage = 0.0
         if technique.platforms:
             covered_platforms = len(set(self.platforms_covered) & set(technique.platforms))
             platform_coverage = covered_platforms / len(technique.platforms)
         
+        # Calculate data source coverage percentage  
         data_source_coverage = 0.0
         if technique.data_sources:
             covered_sources = len(set(self.data_sources_covered) & set(technique.data_sources))
             data_source_coverage = covered_sources / len(technique.data_sources)
         
         # Weighted average: 60% platform coverage, 40% data source coverage
+        # Platform coverage weighted higher as it's often more critical for detection
         self.coverage_score = (platform_coverage * 0.6) + (data_source_coverage * 0.4)
         return self.coverage_score

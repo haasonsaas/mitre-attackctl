@@ -1,4 +1,21 @@
-"""Detection rule generation and mapping functionality."""
+"""
+Detection rule generation and mapping functionality.
+
+This module provides comprehensive capabilities for generating Sigma detection rules
+from ATT&CK techniques and analyzing detection coverage across rule repositories.
+
+Key Components:
+    - RuleTemplateManager: Manages built-in and custom rule templates
+    - SigmaRuleGenerator: Generates Sigma rules from ATT&CK techniques  
+    - CoverageAnalyzer: Analyzes detection coverage across technique repositories
+
+The module supports:
+    - Sigma rule generation for common ATT&CK techniques
+    - Template-based rule creation with technique-specific patterns
+    - Coverage analysis and gap identification
+    - Multiple output formats (YAML, JSON, Markdown)
+    - Extensible template system for new platforms and techniques
+"""
 
 import uuid
 import yaml
@@ -13,13 +30,55 @@ from attackctl.models import (
 
 
 class RuleTemplateManager:
-    """Manages detection rule templates for different platforms."""
+    """
+    Manages detection rule templates for different platforms and log sources.
+    
+    The template manager maintains a library of rule templates that can be used
+    to generate detection rules for specific ATT&CK techniques. Templates are
+    organized by platform (sigma, splunk, etc.) and template type (process_creation,
+    file_event, etc.).
+    
+    Templates use placeholder substitution to customize rules based on technique
+    characteristics like process names, command patterns, file paths, etc.
+    
+    Attributes:
+        templates: Dictionary structure organizing templates by platform and type
+                  Format: {platform: {template_type: template_content}}
+    """
     
     def __init__(self):
+        """Initialize template manager with built-in templates."""
         self.templates = self._load_builtin_templates()
     
     def _load_builtin_templates(self) -> Dict[str, Dict[str, str]]:
-        """Load built-in rule templates."""
+        """
+        Load built-in rule templates for common detection scenarios.
+        
+        Returns a comprehensive set of Sigma rule templates covering the most
+        common ATT&CK techniques and log source categories. Each template includes
+        placeholder variables that get substituted with technique-specific values.
+        
+        Template Categories:
+            - process_creation: Detects malicious process execution
+            - file_creation: Detects suspicious file operations  
+            - registry_event: Detects registry modifications
+            - network_connection: Detects suspicious network activity
+            
+        Placeholder Variables:
+            - {technique_name}: ATT&CK technique name
+            - {rule_id}: Unique UUID for the rule
+            - {technique_description}: Technique description (truncated)
+            - {mitre_url}: Link to MITRE ATT&CK page
+            - {attack_tags}: ATT&CK framework tags
+            - {process_names}: Process names to detect
+            - {command_patterns}: Command line patterns
+            - {file_patterns}: File path patterns
+            - {registry_paths}: Registry key patterns
+            - {severity}: Rule severity level
+            
+        Returns:
+            Dictionary of templates organized by platform and type
+        """
         return {
             "sigma": {
                 "process_creation": """title: {technique_name}
@@ -118,14 +177,62 @@ level: {severity}"""
 
 
 class SigmaRuleGenerator:
-    """Generates Sigma detection rules for ATT&CK techniques."""
+    """
+    Generates Sigma detection rules for ATT&CK techniques.
+    
+    The generator uses a combination of rule templates and technique-specific
+    mappings to create customized Sigma rules. Each technique mapping defines
+    the detection patterns, platforms, and severity levels appropriate for
+    that specific technique.
+    
+    The generation process:
+    1. Look up technique in mappings to get detection patterns
+    2. Select appropriate template based on technique characteristics  
+    3. Substitute template variables with technique-specific values
+    4. Parse and validate the generated YAML content
+    5. Return structured SigmaRule object
+    
+    Attributes:
+        template_manager: Manages rule templates for different log sources
+        technique_mappings: Maps technique IDs to detection patterns and metadata
+    """
     
     def __init__(self):
+        """Initialize generator with template manager and technique mappings."""
         self.template_manager = RuleTemplateManager()
         self.technique_mappings = self._load_technique_mappings()
     
     def _load_technique_mappings(self) -> Dict[str, Dict[str, Any]]:
-        """Load technique-specific detection patterns."""
+        """
+        Load technique-specific detection patterns and metadata.
+        
+        Each mapping defines how to detect a specific ATT&CK technique, including:
+        - Template type to use (process_creation, file_event, etc.)
+        - Target platform (windows, linux, etc.)
+        - Process names commonly associated with the technique
+        - Command line patterns that indicate technique usage
+        - Severity level based on technique impact
+        - Relevant data sources for detection
+        
+        The mappings are curated based on:
+        - Real-world attack observations
+        - Common tool usage patterns
+        - MITRE ATT&CK technique documentation
+        - Community detection rules and research
+        
+        Returns:
+            Dictionary mapping technique IDs to detection configuration
+            
+        Example mapping structure:
+            "T1003": {
+                "template_type": "process_creation",
+                "product": "windows", 
+                "process_names": ["lsass.exe", "mimikatz.exe"],
+                "command_patterns": ["lsass", "sekurlsa"],
+                "severity": "high",
+                "data_sources": ["Process: Process Creation"]
+            }
+        """
         return {
             "T1003": {  # OS Credential Dumping
                 "template_type": "process_creation",
@@ -178,7 +285,32 @@ class SigmaRuleGenerator:
         }
     
     def generate_sigma_rule(self, technique: Technique) -> Optional[SigmaRule]:
-        """Generate a Sigma rule for the given technique."""
+        """
+        Generate a Sigma detection rule for the given ATT&CK technique.
+        
+        Creates a customized Sigma rule by combining technique metadata with
+        predefined detection patterns and templates. The process includes:
+        
+        1. Validate technique has a mapping with detection patterns
+        2. Select appropriate template based on technique characteristics
+        3. Extract ATT&CK tactics and generate framework tags
+        4. Build MITRE ATT&CK reference URL
+        5. Substitute template variables with technique-specific values
+        6. Parse generated YAML and create structured rule object
+        
+        Args:
+            technique: ATT&CK technique object to generate rule for
+            
+        Returns:
+            SigmaRule object if generation successful, None if technique
+            not supported or generation fails
+            
+        Example:
+            technique = bundle.get_technique_by_id("T1003")
+            rule = generator.generate_sigma_rule(technique)
+            if rule:
+                yaml_content = generator.export_rule_yaml(rule)
+        """
         technique_id = technique.mitre_id
         
         # Check if we have a mapping for this technique
@@ -281,13 +413,55 @@ class SigmaRuleGenerator:
 
 
 class CoverageAnalyzer:
-    """Analyzes detection coverage for ATT&CK techniques."""
+    """
+    Analyzes detection coverage for ATT&CK techniques across rule repositories.
+    
+    The analyzer examines existing Sigma rules in a directory structure to
+    determine which ATT&CK techniques have detection coverage. It parses
+    rule files, extracts ATT&CK tags, and generates comprehensive coverage
+    reports showing gaps and statistics.
+    
+    Analysis includes:
+    - Technique-level coverage assessment
+    - Tactic-level coverage statistics  
+    - Platform and data source coverage mapping
+    - Coverage scoring based on completeness
+    - Gap identification for uncovered techniques
+    
+    Attributes:
+        bundle: ATT&CK data bundle containing all techniques for analysis
+    """
     
     def __init__(self, bundle: AttackBundle):
+        """
+        Initialize coverage analyzer with ATT&CK data bundle.
+        
+        Args:
+            bundle: AttackBundle containing techniques, tactics, and metadata
+        """
         self.bundle = bundle
     
     def analyze_directory(self, rules_path: Path) -> List[DetectionCoverage]:
-        """Analyze detection coverage for rules in a directory."""
+        """
+        Analyze detection coverage for all techniques against rules in directory.
+        
+        Recursively scans the provided directory for YAML files containing
+        Sigma rules, extracts ATT&CK technique mappings, and generates
+        coverage assessments for all techniques in the ATT&CK framework.
+        
+        Args:
+            rules_path: Path to directory containing Sigma rule files (.yml/.yaml)
+            
+        Returns:
+            List of DetectionCoverage objects, one per technique in ATT&CK
+            
+        Process:
+            1. Iterate through all ATT&CK techniques
+            2. Search rule files for techniques with matching tags
+            3. Count rules and extract platform/data source coverage
+            4. Calculate coverage scores based on completeness
+            5. Return comprehensive coverage assessment
+        """
         coverage_results = []
         
         # Get all techniques
