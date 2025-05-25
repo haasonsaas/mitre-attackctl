@@ -1,0 +1,9 @@
+include README.md
+include LICENSE
+include CHANGELOG.md
+recursive-include src/attackctl *.py
+recursive-exclude * __pycache__
+recursive-exclude * *.py[co]
+exclude venv/
+exclude .env
+exclude .git/
