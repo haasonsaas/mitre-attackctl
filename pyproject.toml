@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mitre-attackctl"
-version = "1.0.0"
+version = "1.1.0"
 description = "A fast, batteries-included CLI companion for MITRE ATT&CK® TTPs"
 readme = "README.md"
 requires-python = ">=3.9"
